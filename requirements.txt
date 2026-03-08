@@ -1,0 +1,12 @@
+fastapi==0.115.0
+uvicorn==0.32.0
+feedparser==6.0.11
+groq==0.11.0
+google-api-python-client==2.147.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.1
+apscheduler==3.10.4
+requests==2.32.3
+python-dotenv==1.0.1
+httpx==0.27.2
+# psycopg2-binary==2.9.9  # Only needed on Render (PostgreSQL); SQLite used locally

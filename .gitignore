@@ -1,0 +1,43 @@
+# Environment
+.env
+*.env
+
+# Google OAuth
+token.json
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+.Python
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Database
+*.db
+
+# User preferences
+user_prefs.json
+
+# Test files
+test_smoke.py
