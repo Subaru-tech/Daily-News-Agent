@@ -1,7 +1,6 @@
 import os
 import json
 import hashlib
-import sqlite3
 import logging
 from datetime import datetime, timedelta
 
@@ -19,29 +18,21 @@ def get_connection():
         from psycopg2.extras import RealDictCursor
         return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     else:
+        import sqlite3
         db_path = DATABASE_URL.replace("sqlite:///", "")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
 
-def _execute(conn, query, params=None):
-    """Execute query — handles both sqlite3 and psycopg2 parameter styles."""
-    cur = conn.cursor()
-    if params:
-        if _is_postgres:
-            cur.execute(query, params)
-        else:
-            # Convert %s to ? for SQLite
-            query = query.replace("%s", "?")
-            # Convert ANY(%s) for SQLite
-            if "ANY(" in query:
-                # Flatten for SQLite
-                return cur  # Skip ANY queries for SQLite
-            cur.execute(query, params)
-    else:
-        cur.execute(query)
-    return cur
+def _q(query: str) -> str:
+    """Convert query placeholders for the current database.
+    Write all queries using %s (PostgreSQL style).
+    This function converts them to ? for SQLite.
+    """
+    if not _is_postgres:
+        return query.replace("%s", "?")
+    return query
 
 
 def init_db():
@@ -50,29 +41,54 @@ def init_db():
     try:
         cur = conn.cursor()
 
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS claims (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                title           TEXT NOT NULL,
-                url             TEXT NOT NULL,
-                url_hash        TEXT NOT NULL,
-                summary         TEXT DEFAULT '',
-                category        TEXT DEFAULT 'General',
-                confidence      INTEGER DEFAULT 0,
-                verification_status TEXT DEFAULT 'unverified',
-                sources_json    TEXT DEFAULT '[]',
-                calendar_event_id TEXT DEFAULT NULL,
-                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                morning_sent    BOOLEAN DEFAULT 0,
-                evening_sent    BOOLEAN DEFAULT 0,
-                breaking_sent   BOOLEAN DEFAULT 0,
-                debunked        BOOLEAN DEFAULT 0,
-                debunked_note   TEXT DEFAULT NULL,
-                reasoning       TEXT DEFAULT '',
-                tickers_json    TEXT DEFAULT '[]',
-                price_data_json TEXT DEFAULT '{}'
-            )
-        """)
+        if _is_postgres:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS claims (
+                    id              SERIAL PRIMARY KEY,
+                    title           TEXT NOT NULL,
+                    url             TEXT NOT NULL,
+                    url_hash        TEXT NOT NULL,
+                    summary         TEXT DEFAULT '',
+                    category        TEXT DEFAULT 'General',
+                    confidence      INTEGER DEFAULT 0,
+                    verification_status TEXT DEFAULT 'unverified',
+                    sources_json    TEXT DEFAULT '[]',
+                    calendar_event_id TEXT DEFAULT NULL,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    morning_sent    BOOLEAN DEFAULT false,
+                    evening_sent    BOOLEAN DEFAULT false,
+                    breaking_sent   BOOLEAN DEFAULT false,
+                    debunked        BOOLEAN DEFAULT false,
+                    debunked_note   TEXT DEFAULT NULL,
+                    reasoning       TEXT DEFAULT '',
+                    tickers_json    TEXT DEFAULT '[]',
+                    price_data_json TEXT DEFAULT '{}'
+                )
+            """)
+        else:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS claims (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title           TEXT NOT NULL,
+                    url             TEXT NOT NULL,
+                    url_hash        TEXT NOT NULL,
+                    summary         TEXT DEFAULT '',
+                    category        TEXT DEFAULT 'General',
+                    confidence      INTEGER DEFAULT 0,
+                    verification_status TEXT DEFAULT 'unverified',
+                    sources_json    TEXT DEFAULT '[]',
+                    calendar_event_id TEXT DEFAULT NULL,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    morning_sent    BOOLEAN DEFAULT 0,
+                    evening_sent    BOOLEAN DEFAULT 0,
+                    breaking_sent   BOOLEAN DEFAULT 0,
+                    debunked        BOOLEAN DEFAULT 0,
+                    debunked_note   TEXT DEFAULT NULL,
+                    reasoning       TEXT DEFAULT '',
+                    tickers_json    TEXT DEFAULT '[]',
+                    price_data_json TEXT DEFAULT '{}'
+                )
+            """)
 
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_claims_url_hash ON claims(url_hash)
@@ -81,21 +97,36 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_claims_created_at ON claims(created_at)
         """)
 
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS verification_cache (
-                claim_hash      TEXT PRIMARY KEY,
-                result_json     TEXT NOT NULL,
-                verified_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS api_quotas (
-                api_name        TEXT PRIMARY KEY,
-                calls_used      INTEGER DEFAULT 0,
-                resets_at       TIMESTAMP NOT NULL
-            )
-        """)
+        if _is_postgres:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS verification_cache (
+                    claim_hash      TEXT PRIMARY KEY,
+                    result_json     TEXT NOT NULL,
+                    verified_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS api_quotas (
+                    api_name        TEXT PRIMARY KEY,
+                    calls_used      INTEGER DEFAULT 0,
+                    resets_at       TIMESTAMP NOT NULL
+                )
+            """)
+        else:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS verification_cache (
+                    claim_hash      TEXT PRIMARY KEY,
+                    result_json     TEXT NOT NULL,
+                    verified_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS api_quotas (
+                    api_name        TEXT PRIMARY KEY,
+                    calls_used      INTEGER DEFAULT 0,
+                    resets_at       TIMESTAMP NOT NULL
+                )
+            """)
 
         conn.commit()
         logger.info("[DB] Schema initialized successfully.")
@@ -118,15 +149,15 @@ def save_claim(claim: dict) -> int | None:
     try:
         cur = conn.cursor()
         # Check duplicate
-        cur.execute("SELECT id FROM claims WHERE url_hash = ?", (h,))
+        cur.execute(_q("SELECT id FROM claims WHERE url_hash = %s"), (h,))
         if cur.fetchone():
             return None  # Already exists
 
         cur.execute(
-            """INSERT INTO claims
+            _q("""INSERT INTO claims
                (title, url, url_hash, summary, category, confidence,
                 verification_status, sources_json, reasoning, tickers_json, price_data_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""),
             (
                 claim.get("title", ""),
                 claim["url"],
@@ -142,6 +173,11 @@ def save_claim(claim: dict) -> int | None:
             ),
         )
         conn.commit()
+
+        if _is_postgres:
+            cur.execute("SELECT lastval()")
+            row = cur.fetchone()
+            return row["lastval"] if row else None
         return cur.lastrowid
     except Exception as e:
         logger.error(f"[DB] Save claim failed: {e}")
@@ -156,23 +192,26 @@ def get_claims_since(hours: int, sent_field: str | None = None) -> list[dict]:
     try:
         cur = conn.cursor()
         since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
-        query = "SELECT * FROM claims WHERE created_at >= ?"
-        params = [since]
+        query = "SELECT * FROM claims WHERE created_at >= %s"
+        params: list = [since]
 
         if sent_field and sent_field in ("morning_sent", "evening_sent", "breaking_sent"):
-            query += f" AND {sent_field} = 0"
+            if _is_postgres:
+                query += f" AND {sent_field} = false"
+            else:
+                query += f" AND {sent_field} = 0"
 
         query += " ORDER BY confidence DESC LIMIT 50"
-        cur.execute(query, params)
+        cur.execute(_q(query), params)
         rows = cur.fetchall()
 
         results = []
         for row in rows:
             d = dict(row)
             # Parse JSON fields
-            d["sources"] = json.loads(d.get("sources_json", "[]"))
-            d["tickers"] = json.loads(d.get("tickers_json", "[]"))
-            d["price_data"] = json.loads(d.get("price_data_json", "{}"))
+            d["sources"] = json.loads(d.get("sources_json", "[]") or "[]")
+            d["tickers"] = json.loads(d.get("tickers_json", "[]") or "[]")
+            d["price_data"] = json.loads(d.get("price_data_json", "{}") or "{}")
             results.append(d)
         return results
     except Exception as e:
@@ -189,11 +228,18 @@ def mark_digest_sent(claim_ids: list[int], field: str):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        placeholders = ",".join("?" * len(claim_ids))
-        cur.execute(
-            f"UPDATE claims SET {field} = 1 WHERE id IN ({placeholders})",
-            claim_ids,
-        )
+        if _is_postgres:
+            placeholders = ",".join(["%s"] * len(claim_ids))
+            val = True
+        else:
+            placeholders = ",".join(["?"] * len(claim_ids))
+            val = 1
+
+        query = f"UPDATE claims SET {field} = {val} WHERE id IN ({placeholders})"
+        if _is_postgres:
+            cur.execute(query, claim_ids)
+        else:
+            cur.execute(query, claim_ids)
         conn.commit()
     except Exception as e:
         logger.error(f"[DB] Mark digest failed: {e}")
@@ -205,7 +251,10 @@ def mark_breaking_sent(claim_id: int):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE claims SET breaking_sent = 1 WHERE id = ?", (claim_id,))
+        if _is_postgres:
+            cur.execute("UPDATE claims SET breaking_sent = true WHERE id = %s", (claim_id,))
+        else:
+            cur.execute("UPDATE claims SET breaking_sent = 1 WHERE id = ?", (claim_id,))
         conn.commit()
     except Exception as e:
         logger.error(f"[DB] Mark breaking failed: {e}")
@@ -218,7 +267,7 @@ def update_claim_calendar_id(claim_id: int, event_id: str):
     try:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE claims SET calendar_event_id = ? WHERE id = ?",
+            _q("UPDATE claims SET calendar_event_id = %s WHERE id = %s"),
             (event_id, claim_id),
         )
         conn.commit()
@@ -232,11 +281,18 @@ def update_claim_debunked(claim_id: int, note: str):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE claims SET debunked = 1, debunked_note = ?, "
-            "verification_status = 'debunked' WHERE id = ?",
-            (note, claim_id),
-        )
+        if _is_postgres:
+            cur.execute(
+                "UPDATE claims SET debunked = true, debunked_note = %s, "
+                "verification_status = 'debunked' WHERE id = %s",
+                (note, claim_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE claims SET debunked = 1, debunked_note = ?, "
+                "verification_status = 'debunked' WHERE id = ?",
+                (note, claim_id),
+            )
         conn.commit()
     except Exception as e:
         logger.error(f"[DB] Update debunked failed: {e}")
@@ -252,8 +308,8 @@ def check_cache(claim_hash: str) -> dict | None:
         cur = conn.cursor()
         week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
         cur.execute(
-            "SELECT result_json FROM verification_cache "
-            "WHERE claim_hash = ? AND verified_at >= ?",
+            _q("SELECT result_json FROM verification_cache "
+               "WHERE claim_hash = %s AND verified_at >= %s"),
             (claim_hash, week_ago),
         )
         row = cur.fetchone()
@@ -269,11 +325,20 @@ def set_cache(claim_hash: str, result: dict):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO verification_cache (claim_hash, result_json, verified_at) "
-            "VALUES (?, ?, ?)",
-            (claim_hash, json.dumps(result), datetime.utcnow().isoformat()),
-        )
+        now = datetime.utcnow().isoformat()
+        if _is_postgres:
+            cur.execute(
+                "INSERT INTO verification_cache (claim_hash, result_json, verified_at) "
+                "VALUES (%s, %s, %s) "
+                "ON CONFLICT (claim_hash) DO UPDATE SET result_json = %s, verified_at = %s",
+                (claim_hash, json.dumps(result), now, json.dumps(result), now),
+            )
+        else:
+            cur.execute(
+                "INSERT OR REPLACE INTO verification_cache (claim_hash, result_json, verified_at) "
+                "VALUES (?, ?, ?)",
+                (claim_hash, json.dumps(result), now),
+            )
         conn.commit()
     except Exception as e:
         logger.debug(f"[DB] Cache set failed: {e}")
@@ -287,16 +352,16 @@ def get_quota(api_name: str) -> dict:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM api_quotas WHERE api_name = ?", (api_name,))
+        cur.execute(_q("SELECT * FROM api_quotas WHERE api_name = %s"), (api_name,))
         row = cur.fetchone()
         if not row:
             return {"api_name": api_name, "calls_used": 0, "resets_at": None}
         d = dict(row)
         # Auto-reset if past reset time
-        if d["resets_at"] and datetime.utcnow().isoformat() >= d["resets_at"]:
+        if d["resets_at"] and datetime.utcnow().isoformat() >= str(d["resets_at"]):
             reset_time = (datetime.utcnow() + timedelta(days=1)).isoformat()
             cur.execute(
-                "UPDATE api_quotas SET calls_used = 0, resets_at = ? WHERE api_name = ?",
+                _q("UPDATE api_quotas SET calls_used = 0, resets_at = %s WHERE api_name = %s"),
                 (reset_time, api_name),
             )
             conn.commit()
@@ -314,12 +379,20 @@ def increment_quota(api_name: str):
     try:
         cur = conn.cursor()
         reset_time = (datetime.utcnow() + timedelta(days=1)).isoformat()
-        cur.execute(
-            "INSERT OR REPLACE INTO api_quotas (api_name, calls_used, resets_at) "
-            "VALUES (?, COALESCE((SELECT calls_used FROM api_quotas WHERE api_name = ?), 0) + 1, "
-            "COALESCE((SELECT resets_at FROM api_quotas WHERE api_name = ?), ?))",
-            (api_name, api_name, api_name, reset_time),
-        )
+        if _is_postgres:
+            cur.execute(
+                "INSERT INTO api_quotas (api_name, calls_used, resets_at) "
+                "VALUES (%s, 1, %s) "
+                "ON CONFLICT (api_name) DO UPDATE SET calls_used = api_quotas.calls_used + 1",
+                (api_name, reset_time),
+            )
+        else:
+            cur.execute(
+                "INSERT OR REPLACE INTO api_quotas (api_name, calls_used, resets_at) "
+                "VALUES (?, COALESCE((SELECT calls_used FROM api_quotas WHERE api_name = ?), 0) + 1, "
+                "COALESCE((SELECT resets_at FROM api_quotas WHERE api_name = ?), ?))",
+                (api_name, api_name, api_name, reset_time),
+            )
         conn.commit()
     except Exception as e:
         logger.debug(f"[DB] Quota increment failed: {e}")
