@@ -126,6 +126,22 @@ def job_weekly_summary():
         logger.error(f"[Scheduler] Weekly summary failed: {e}", exc_info=True)
 
 
+def job_keep_alive():
+    """Self-ping to prevent Render free tier from spinning down."""
+    import os
+    import requests as req
+
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "")
+    if not render_url:
+        return  # Skip locally
+
+    try:
+        resp = req.get(f"{render_url}/health", timeout=10)
+        logger.debug(f"[Keep-Alive] Pinged {render_url}: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[Keep-Alive] Ping failed: {e}")
+
+
 def start_scheduler():
     """Start all scheduled jobs."""
     # Every 15 minutes: fetch + verify + save
@@ -161,13 +177,22 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # Every 10 minutes: keep Render alive (self-ping)
+    scheduler.add_job(
+        job_keep_alive,
+        IntervalTrigger(minutes=10),
+        id="keep_alive",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info(
         f"[Scheduler] Started — "
         f"Fetch: every {FETCH_INTERVAL_MINUTES}min | "
         f"Morning: {MORNING_HOUR}:{MORNING_MINUTE:02d} | "
         f"Evening: {EVENING_HOUR}:{EVENING_MINUTE:02d} | "
-        f"Weekly: Sun 9:00 "
+        f"Weekly: Sun 9:00 | "
+        f"Keep-alive: every 10min "
         f"({TIMEZONE})"
     )
 
@@ -177,3 +202,4 @@ def stop_scheduler():
     if scheduler.running:
         scheduler.shutdown(wait=False)
         logger.info("[Scheduler] Stopped")
+
