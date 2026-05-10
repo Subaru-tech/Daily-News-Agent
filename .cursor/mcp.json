@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "jetro": {
+      "type": "stdio",
+      "command": "C:\\Users\\atharva\\.jetro\\runtime\\node-win32-x64.exe",
+      "args": [
+        "C:\\Users\\atharva\\.jetro\\mcp-server\\index.js"
+      ],
+      "env": {
+        "JET_WORKSPACE": "c:\\Users\\atharva\\Desktop\\Daily-News-Agent",
+        "JET_API_URL": "https://api.jetro.ai",
+        "PATH": "C:\\Users\\atharva\\.jetro\\runtime;C:\\WINDOWS\\system32;C:\\WINDOWS;C:\\WINDOWS\\System32\\Wbem;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\;C:\\WINDOWS\\System32\\OpenSSH\\;C:\\Program Files\\Microsoft VS Code\\bin;C:\\Program Files\\cursor\\resources\\app\\bin;C:\\Program Files\\nodejs\\;C:\\Program Files\\Go\\bin;C:\\Program Files\\Git\\cmd;C:\\Program Files\\GitHub CLI\\;C:\\Program Files\\PuTTY\\;C:\\Users\\atharva\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\;C:\\Users\\atharva\\AppData\\Local\\Programs\\Python\\Python310\\;C:\\WINDOWS\\system32;C:\\WINDOWS;C:\\WINDOWS\\System32\\Wbem;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\;C:\\WINDOWS\\System32\\OpenSSH\\;C:\\Program Files\\Microsoft VS Code\\bin;C:\\Program Files\\cursor\\resources\\app\\bin;C:\\Program Files\\nodejs\\;C:\\Program Files\\Go\\bin;C:\\Program Files\\Git\\cmd;C:\\Program Files\\GitHub CLI\\;C:\\Program Files\\PuTTY\\;C:\\Users\\atharva\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\atharva\\AppData\\Local\\Programs\\Sylix\\bin;C:\\Users\\atharva\\AppData\\Roaming\\npm;C:\\Users\\atharva\\go\\bin;C:\\Users\\atharva\\AppData\\Local\\Programs\\picoclaw;C:\\Users\\atharva\\AppData\\Local\\Programs\\Antigravity\\bin;C:\\Users\\atharva\\AppData\\Local\\Python\\bin;C:\\Users\\atharva\\AppData\\Local\\Programs\\picoclaw;C:\\flutter\\bin"
+      }
+    }
+  }
+}

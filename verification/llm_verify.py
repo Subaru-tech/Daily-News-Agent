@@ -131,3 +131,40 @@ def needs_llm_verification(article: dict, structured_result: dict) -> bool:
         return True
 
     return False
+
+
+def synthesize_narrative_drift(article: dict) -> str:
+    """Analyze clustered articles to detect narrative drift across sources."""
+    sources = article.get("cluster_sources", [])
+    if len(sources) <= 1:
+        return ""
+
+    client = _get_client()
+    if not client:
+        return ""
+
+    title = article.get("title", "")
+    summary = article.get("summary", "")
+
+    prompt = f"""Analyze these various summaries of a clustered news event from multiple sources to detect "Narrative Drift" (how the story evolves or differs between sources).
+
+Title: {title}
+Summaries:
+{summary[:3000]}
+
+Return a concise 1-2 sentence analysis if there is any contradiction, bias shift, or progression (e.g. from rumor to confirmed) among the sources. If they all align perfectly, just say 'Sources consistently report this event.'"""
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a media bias and narrative tracking analyst."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=150,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"[LLM] Narrative drift synthesis failed: {e}")
+        return ""

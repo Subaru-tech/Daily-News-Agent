@@ -31,6 +31,7 @@ _user_prefs_file = "user_prefs.json"
 _user_prefs = {
     "extra_tickers": [],          # Added via /watch
     "muted_categories": [],       # Muted via /mute
+    "portfolio_tickers": [],      # Added via /portfolio
 }
 
 
@@ -40,6 +41,7 @@ def _load_prefs():
     try:
         with open(_user_prefs_file, "r") as f:
             _user_prefs = json.load(f)
+            _user_prefs.setdefault("portfolio_tickers", [])
     except (FileNotFoundError, json.JSONDecodeError):
         pass
 
@@ -58,6 +60,11 @@ def get_muted_categories() -> list[str]:
 def get_extra_tickers() -> list[str]:
     """Get list of user-added tickers."""
     return _user_prefs.get("extra_tickers", [])
+
+
+def get_portfolio_tickers() -> list[str]:
+    """Get list of personal portfolio tickers."""
+    return _user_prefs.get("portfolio_tickers", [])
 
 
 def _send_reply(chat_id: int, text: str):
@@ -283,6 +290,39 @@ def _handle_unmute(chat_id: int, args: str = ""):
         _send_reply(chat_id, f"*{resolved}* wasn't muted.")
 
 
+def _handle_portfolio(chat_id: int, args: str = ""):
+    """Handle /portfolio add|remove TICKER."""
+    parts = args.strip().upper().split()
+    action = parts[0].lower() if parts else ""
+    ticker = parts[1] if len(parts) > 1 else ""
+
+    portfolio = _user_prefs.get("portfolio_tickers", [])
+
+    if not action or action not in ["add", "remove"] or not ticker:
+        if portfolio:
+            _send_reply(chat_id, f"💼 *Your Portfolio:* {', '.join(portfolio)}\n\nUse `/portfolio add NVDA` or `/portfolio remove TSLA`.")
+        else:
+            _send_reply(chat_id, "💼 Portfolio is empty.\n\nUse `/portfolio add NVDA` to track your holdings. Portfolio matches trigger breaking alerts even on lower confidence bounds.")
+        return
+
+    if action == "add":
+        if ticker in portfolio:
+            _send_reply(chat_id, f"💼 *{ticker}* is already in your portfolio.")
+        else:
+            portfolio.append(ticker)
+            _user_prefs["portfolio_tickers"] = portfolio
+            _save_prefs()
+            _send_reply(chat_id, f"💼 Added *{ticker}* to your portfolio.\n\nYou will receive dedicated breaking alerts for this holding.")
+    elif action == "remove":
+        if ticker in portfolio:
+            portfolio.remove(ticker)
+            _user_prefs["portfolio_tickers"] = portfolio
+            _save_prefs()
+            _send_reply(chat_id, f"🗑 Removed *{ticker}* from your portfolio.")
+        else:
+            _send_reply(chat_id, f"💼 *{ticker}* is not in your portfolio.")
+
+
 def _handle_sentiment(chat_id: int, args: str = ""):
     """Handle /sentiment — ticker sentiment report."""
     from verification.sentiment import get_ticker_sentiment
@@ -359,6 +399,7 @@ COMMAND_HANDLERS = {
     "/unwatch": _handle_unwatch,
     "/mute": _handle_mute,
     "/unmute": _handle_unmute,
+    "/portfolio": _handle_portfolio,
     "/sentiment": _handle_sentiment,
     "/help": _handle_help,
     "/start": _handle_help,

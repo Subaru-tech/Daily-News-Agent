@@ -28,14 +28,28 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
+    from ingestors.manager import manager
+
     logger.info("🚀 Daily News Agent starting up...")
     init_db()
+    
+    # Start async ingestion workers
+    await manager.start()
+    
+    # Start cron jobs
     start_scheduler()
+    
     start_bot_polling()
     send_startup_message()
+    
     yield
+    
     stop_bot_polling()
     stop_scheduler()
+    
+    # Shutdown ingestion workers gracefully
+    await manager.shutdown()
+    
     logger.info("👋 Daily News Agent shutting down.")
 
 
@@ -86,10 +100,10 @@ def get_status():
 
 
 @app.post("/trigger")
-def trigger_manual():
+async def trigger_manual():
     """Manually trigger a news fetch + verification cycle."""
     try:
-        job_fetch_and_verify()
+        await job_fetch_and_verify()
         return {"message": "Fetch and verify triggered successfully"}
     except Exception as e:
         return JSONResponse(
@@ -111,3 +125,7 @@ def sentiment_endpoint(hours: int = 168):
     """Get ticker sentiment analysis."""
     data = get_ticker_sentiment(hours=hours)
     return {"tickers": data}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -8,7 +8,7 @@ from config.settings import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
-_is_postgres = DATABASE_URL.startswith("postgresql")
+_is_postgres = DATABASE_URL.startswith("postgres")
 
 
 def get_connection():
@@ -191,7 +191,9 @@ def get_claims_since(hours: int, sent_field: str | None = None) -> list[dict]:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        # Use strftime instead of isoformat to match SQLite CURRENT_TIMESTAMP format (YYYY-MM-DD HH:MM:SS)
+        # SQLite string comparison fails if we compare '2024-05-09 10:00:00' with '2024-05-09T10:00:00'
+        since = (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
         query = "SELECT * FROM claims WHERE created_at >= %s"
         params: list = [since]
 

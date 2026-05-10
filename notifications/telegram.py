@@ -174,7 +174,10 @@ def send_breaking_alert(article: dict) -> bool:
     cat = article.get("category", "")
     conf = article.get("confidence", 0)
 
-    msg = f"🚨 *BREAKING — {cat}*\n\n"
+    if article.get("is_portfolio"):
+        msg = f"💼 *PORTFOLIO ALERT — {cat}*\n\n"
+    else:
+        msg = f"🚨 *BREAKING — {cat}*\n\n"
     msg += f"*{article.get('title', '')}*\n\n"
     msg += f"Confidence: {conf}%\n"
 
@@ -256,6 +259,27 @@ def track_success():
     _consecutive_failures = 0
 
 
+def send_document(file_path: str, caption: str = "") -> bool:
+    """Send a file as a Telegram document."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    try:
+        with open(file_path, "rb") as f:
+            resp = requests.post(
+                url, 
+                data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "Markdown"}, 
+                files={"document": f},
+                timeout=30
+            )
+        resp.raise_for_status()
+        return resp.json().get("ok", False)
+    except Exception as e:
+        logger.error(f"[Telegram] Failed to send document: {e}")
+        return False
+
+
 def send_weekly_summary(articles: list[dict]) -> bool:
     """Sunday 9 AM — Weekly summary with trends and tickers."""
     import json
@@ -310,5 +334,17 @@ def send_weekly_summary(articles: list[dict]) -> bool:
         msg += f"  {i}. {icon} [{title}...]({url})\n"
 
     msg += f"\n📅 [View Full Week](https://calendar.google.com/calendar/r/week)"
-    return _send_message(msg)
+    
+    # Output the initial message
+    success = _send_message(msg)
+
+    # Export & attach full MD report
+    try:
+        from digest.export import export_weekly_markdown
+        md_file = export_weekly_markdown(articles)
+        send_document(md_file, f"📄 Attached: Full Weekly Report ({now})")
+    except Exception as e:
+        logger.error(f"[Telegram] Failed to generate/send markdown: {e}")
+
+    return success
 
