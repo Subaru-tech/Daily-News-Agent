@@ -136,8 +136,8 @@ def create_news_event(claim: dict) -> str | None:
     event = {
         "summary": f"{emoji} {claim.get('title', 'News')[:80]}",
         "description": description,
-        "start": {"date": today, "timeZone": "Asia/Kolkata"},
-        "end": {"date": tomorrow, "timeZone": "Asia/Kolkata"},
+        "start": {"date": today},
+        "end": {"date": tomorrow},
         "colorId": CALENDAR_COLORS.get(category, "1"),
         "reminders": {"useDefault": False, "overrides": []},
     }

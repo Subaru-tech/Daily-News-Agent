@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS claims (
     evening_sent    BOOLEAN DEFAULT FALSE,
     breaking_sent   BOOLEAN DEFAULT FALSE,
     debunked        BOOLEAN DEFAULT FALSE,
-    debunked_note   TEXT DEFAULT NULL
+    debunked_note   TEXT DEFAULT NULL,
+    reasoning       TEXT DEFAULT '',
+    tickers_json    TEXT DEFAULT '[]',
+    price_data_json TEXT DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_claims_url_hash ON claims(url_hash);

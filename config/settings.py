@@ -12,7 +12,7 @@ CURRENTS_API_KEY = os.getenv("CURRENTS_API_KEY", "")
 GNEWS_API_KEY = os.getenv("GNEWS_API_KEY", "")
 NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY", "")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///news_agent.db")
 
 # === Timezone ===
 TIMEZONE = "Asia/Kolkata"

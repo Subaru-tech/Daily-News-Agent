@@ -149,6 +149,17 @@ class AsyncIngestionManager:
 
         affected_clusters = set()
         
+        all_art_dicts = [
+            {
+                "title": a.headline,
+                "category": a.category,
+                "url": a.url,
+                "source": a.source,
+                "summary": a.summary
+            }
+            for a in articles
+        ]
+
         for art in novel_articles:
             priority = 0 if self._is_portfolio_relevant(art) else 1
             await self.llm_queue.put((
@@ -157,6 +168,7 @@ class AsyncIngestionManager:
                 {
                     "type": "verification",
                     "article": art,
+                    "all_articles": all_art_dicts,
                 }
             ))
             affected_clusters.add(art.cluster_id)
@@ -239,7 +251,7 @@ class AsyncIngestionManager:
             
             try:
                 if task["type"] == "verification":
-                    await self._verify_article(task["article"])
+                    await self._verify_article(task["article"], task.get("all_articles", []))
                 elif task["type"] == "narrative_drift":
                     await self._synthesize_narrative(task)
                 
@@ -250,7 +262,7 @@ class AsyncIngestionManager:
             finally:
                 self.llm_queue.task_done()
 
-    async def _verify_article(self, article: Article):
+    async def _verify_article(self, article: Article, all_articles: List[Dict] = []):
         """Invoke structured check, then potentially LLM check, then dispatch."""
         from verification.structured import verify_structured
         from config.settings import CONFIDENCE_THRESHOLD_CALENDAR
@@ -258,7 +270,7 @@ class AsyncIngestionManager:
         # 1. Structured Validation 
         # (Assuming existing logic expects a dict, we pass dict representations)
         raw_dict = {"title": article.headline, "category": article.category, "url": article.url, "source": article.source, "summary": article.summary}
-        base_result = verify_structured(raw_dict, [raw_dict])
+        base_result = verify_structured(raw_dict, all_articles or [raw_dict])
         
         article.verification = {
             "confidence": base_result.get("confidence", 50),

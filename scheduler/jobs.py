@@ -18,6 +18,8 @@ from notifications.telegram import (
 from digest.morning import compile_morning_digest
 from digest.evening import compile_evening_digest
 
+import asyncio
+
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone=TIMEZONE)
@@ -28,43 +30,43 @@ async def job_fetch_and_verify():
     try:
         await manager.run_fetch_cycle()
     except Exception as e:
-        track_failure("fetch_and_verify", str(e))
+        await asyncio.to_thread(track_failure, "fetch_and_verify", str(e))
         logger.error(f"[Scheduler] Fetch failed: {e}", exc_info=True)
 
-def job_morning_brief():
+async def job_morning_brief():
     """Send 8 AM morning brief via Telegram."""
     logger.info("[Scheduler] Sending morning brief...")
     try:
-        articles = compile_morning_digest()
-        send_morning_brief(articles)
+        articles = await asyncio.to_thread(compile_morning_digest)
+        await asyncio.to_thread(send_morning_brief, articles)
         logger.info(f"[Scheduler] Morning brief sent: {len(articles)} items")
     except Exception as e:
-        track_failure("morning_brief", str(e))
+        await asyncio.to_thread(track_failure, "morning_brief", str(e))
         logger.error(f"[Scheduler] Morning brief failed: {e}", exc_info=True)
 
-def job_evening_recap():
+async def job_evening_recap():
     """Send 10 PM evening recap via Telegram."""
     logger.info("[Scheduler] Sending evening recap...")
     try:
-        articles = compile_evening_digest()
-        send_evening_recap(articles)
+        articles = await asyncio.to_thread(compile_evening_digest)
+        await asyncio.to_thread(send_evening_recap, articles)
         logger.info(f"[Scheduler] Evening recap sent: {len(articles)} items")
     except Exception as e:
-        track_failure("evening_recap", str(e))
+        await asyncio.to_thread(track_failure, "evening_recap", str(e))
         logger.error(f"[Scheduler] Evening recap failed: {e}", exc_info=True)
 
-def job_weekly_summary():
+async def job_weekly_summary():
     """Send Sunday 9 AM weekly summary via Telegram."""
     logger.info("[Scheduler] Sending weekly summary...")
     try:
-        articles = get_claims_since(hours=168)  # 7 days
-        send_weekly_summary(articles)
+        articles = await asyncio.to_thread(get_claims_since, 168)  # 7 days
+        await asyncio.to_thread(send_weekly_summary, articles)
         logger.info(f"[Scheduler] Weekly summary sent: {len(articles)} items")
     except Exception as e:
-        track_failure("weekly_summary", str(e))
+        await asyncio.to_thread(track_failure, "weekly_summary", str(e))
         logger.error(f"[Scheduler] Weekly summary failed: {e}", exc_info=True)
 
-def job_keep_alive():
+async def job_keep_alive():
     """Self-ping to prevent Render free tier from spinning down."""
     import os
     import requests as req
@@ -74,7 +76,7 @@ def job_keep_alive():
         return  # Skip locally
 
     try:
-        resp = req.get(f"{render_url}/health", timeout=10)
+        resp = await asyncio.to_thread(req.get, f"{render_url}/health", timeout=10)
         logger.debug(f"[Keep-Alive] Pinged {render_url}: {resp.status_code}")
     except Exception as e:
         logger.warning(f"[Keep-Alive] Ping failed: {e}")

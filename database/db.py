@@ -308,7 +308,7 @@ def check_cache(claim_hash: str) -> dict | None:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        week_ago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
         cur.execute(
             _q("SELECT result_json FROM verification_cache "
                "WHERE claim_hash = %s AND verified_at >= %s"),
@@ -327,7 +327,7 @@ def set_cache(claim_hash: str, result: dict):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        now = datetime.utcnow().isoformat()
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         if _is_postgres:
             cur.execute(
                 "INSERT INTO verification_cache (claim_hash, result_json, verified_at) "
