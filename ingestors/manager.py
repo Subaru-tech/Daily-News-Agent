@@ -16,6 +16,7 @@ from ingestors.gnews import fetch_gnews
 from ingestors.newsdata import fetch_newsdata
 from config.settings import WATCHED_TICKERS
 from notifications.bot_commands import get_portfolio_tickers
+from database.db import log_metric
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ class AsyncIngestionManager:
         self._llm_tasks: List[asyncio.Task] = []
         self._running = False
         self.llm_workers_count = llm_workers
+        self.last_fetch_time = 0.0
 
     async def start(self):
         """Call once at application startup."""
@@ -93,35 +95,59 @@ class AsyncIngestionManager:
         loop = asyncio.get_running_loop()
         
         def _fetch_sync():
+            from database.db import get_source_health, report_source_success, report_source_failure
+            from datetime import datetime
+            
             all_articles = []
+            
+            def _safe_fetch(source_id: str, fetch_func, *args, **kwargs):
+                health = get_source_health(source_id)
+                if health["next_attempt_at"] > datetime.utcnow():
+                    logger.debug(f"[Manager] Skipping {source_id} (backoff until {health['next_attempt_at']})")
+                    return
+                try:
+                    res = fetch_func(*args, **kwargs)
+                    all_articles.extend(res)
+                    report_source_success(source_id)
+                except Exception as e:
+                    logger.error(f"[Manager] {source_id} fetch error: {e}")
+                    report_source_failure(source_id)
+
+            # RSS Feeds (Internal tracking handles individual feeds)
             try:
                 all_articles.extend(fetch_rss_feeds())
-                all_articles.extend(fetch_hackernews(limit=50))
-                all_articles.extend(fetch_reddit(limit=15))
-                
-                ticker_groups = [
-                    (" ".join(WATCHED_TICKERS[:4]), "Finance & Stocks"),
-                    (" ".join(WATCHED_TICKERS[4:7]), "Finance & Stocks"),
-                    ("Bitcoin Ethereum crypto", "Finance & Stocks"),
-                    ("RELIANCE INFY TCS NSE", "Finance & Stocks"),
-                ]
-                for query, cat in ticker_groups:
-                    all_articles.extend(fetch_currents(query, category=cat, limit=5))
-
-                topic_searches = [
-                    ("artificial intelligence AI tools", "AI & Tech"),
-                    ("startup funding venture capital", "Startups"),
-                    ("geopolitics sanctions conflict", "Geo-Politics"),
-                ]
-                for query, cat in topic_searches:
-                    all_articles.extend(fetch_currents(query, category=cat, limit=5))
-
-                gnews_queries = [("AI artificial intelligence", "AI & Tech"), ("stock market earnings", "Finance & Stocks")]
-                for query, cat in gnews_queries:
-                    all_articles.extend(fetch_gnews(query, category=cat, limit=3))
-
             except Exception as e:
-                logger.error(f"[Manager] Sync fetch error: {e}")
+                logger.error(f"[Manager] RSS fetch error: {e}")
+
+            # HackerNews
+            _safe_fetch("hackernews", fetch_hackernews, limit=50)
+            
+            # Reddit
+            _safe_fetch("reddit", fetch_reddit, limit=15)
+            
+            # Currents API - Finance
+            ticker_groups = [
+                (" ".join(WATCHED_TICKERS[:4]), "Finance & Stocks"),
+                (" ".join(WATCHED_TICKERS[4:7]), "Finance & Stocks"),
+                ("Bitcoin Ethereum crypto", "Finance & Stocks"),
+                ("RELIANCE INFY TCS NSE", "Finance & Stocks"),
+            ]
+            for i, (query, cat) in enumerate(ticker_groups):
+                _safe_fetch(f"currents_finance_{i}", fetch_currents, query, category=cat, limit=5)
+
+            # Currents API - Topics
+            topic_searches = [
+                ("artificial intelligence AI tools", "AI & Tech"),
+                ("startup funding venture capital", "Startups"),
+                ("geopolitics sanctions conflict", "Geo-Politics"),
+            ]
+            for i, (query, cat) in enumerate(topic_searches):
+                _safe_fetch(f"currents_topics_{i}", fetch_currents, query, category=cat, limit=5)
+
+            # GNews API
+            gnews_queries = [("AI artificial intelligence", "AI & Tech"), ("stock market earnings", "Finance & Stocks")]
+            for i, (query, cat) in enumerate(gnews_queries):
+                _safe_fetch(f"gnews_{i}", fetch_gnews, query, category=cat, limit=3)
             return all_articles
 
         logger.info("[Manager] Fetching all raw sources asynchronously...")
@@ -130,8 +156,11 @@ class AsyncIngestionManager:
 
     async def run_fetch_cycle(self):
         """Called every 15 minutes by cron/scheduler."""
+        start_time = time.monotonic()
+        
         raw_articles = await self.fetch_from_all_sources()
         if not raw_articles:
+            log_metric("fetch_cycle", int((time.monotonic() - start_time) * 1000), "all", False, 0.0)
             return
 
         articles = [self._normalize(a) for a in raw_articles]
@@ -145,6 +174,7 @@ class AsyncIngestionManager:
 
         if not novel_articles:
             logger.info("All %d articles were duplicates", len(raw_articles))
+            log_metric("fetch_cycle", int((time.monotonic() - start_time) * 1000), "all", False, 0.0)
             return
 
         affected_clusters = set()
@@ -186,7 +216,26 @@ class AsyncIngestionManager:
                     }
                 ))
 
-        logger.info("Cycle complete: %d raw -> %d novel. Queue depth: %d", len(raw_articles), len(novel_articles), self.llm_queue.qsize())
+        self.last_fetch_time = time.monotonic()
+        novel_count = len(novel_articles)
+        log_metric("fetch_cycle", int((time.monotonic() - start_time) * 1000), "all", True, float(novel_count))
+        logger.info("Cycle complete: %d raw -> %d novel. Queue depth: %d", len(raw_articles), novel_count, self.llm_queue.qsize())
+
+        # Volume Anomaly Detector
+        if novel_count > 10:
+            try:
+                from database.db import get_recent_metrics
+                recent = get_recent_metrics(24)
+                if recent:
+                    volumes = [m["llm_cost"] for m in recent if m.get("event_type") == "fetch_cycle"]
+                    if len(volumes) >= 5:  # Need a baseline
+                        avg_vol = sum(volumes) / len(volumes)
+                        if avg_vol > 0 and novel_count > (avg_vol * 3):
+                            msg = f"📈 *Volume Anomaly Detected*\n\nProcessed {novel_count} novel articles in this cycle (3x normal average of {avg_vol:.1f}). Possible major news event."
+                            from notifications.telegram import _send_message
+                            _send_message(msg)
+            except Exception as e:
+                logger.error(f"[Manager] Volume anomaly check failed: {e}")
 
     # ==================================================================
     # CLUSTERING (Jaccard)

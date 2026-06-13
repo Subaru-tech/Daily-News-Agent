@@ -24,10 +24,20 @@ def fetch_rss_feeds() -> list[dict]:
     """Fetch articles from all RSS feeds, return normalized list."""
     articles = []
 
+    from database.db import get_source_health, report_source_success, report_source_failure
+    
     for category, urls in RSS_SOURCES.items():
         for url in urls:
+            health = get_source_health(url)
+            if health["next_attempt_at"] > datetime.utcnow():
+                logger.debug(f"[RSS] Skipping {url} (backoff until {health['next_attempt_at']})")
+                continue
+                
             try:
                 feed = feedparser.parse(url)
+                if feed.get("bozo_exception"):
+                    raise Exception(f"Feed parser error: {feed.bozo_exception}")
+                    
                 for entry in feed.entries[:5]:  # Top 5 per source
                     title = entry.get("title", "").strip()
                     link = entry.get("link", "").strip()
@@ -54,8 +64,10 @@ def fetch_rss_feeds() -> list[dict]:
                         "published": entry.get("published", ""),
                         "fetched_at": datetime.utcnow().isoformat(),
                     })
+                report_source_success(url)
             except Exception as e:
                 logger.warning(f"[RSS] Failed to fetch {url}: {e}")
+                report_source_failure(url)
 
     logger.info(f"[RSS] Fetched {len(articles)} articles from {sum(len(v) for v in RSS_SOURCES.values())} feeds")
     return articles

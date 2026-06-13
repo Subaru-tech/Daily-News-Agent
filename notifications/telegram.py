@@ -117,6 +117,12 @@ def send_evening_recap(articles: list[dict]) -> bool:
 
     msg += "*Today's Confirmed Moves*\n\n"
 
+    # Calculate Daily Hype Cycle Index
+    hype_scores = [a.get("hype_score", 0) for a in articles]
+    avg_hype = sum(hype_scores) / len(hype_scores) if hype_scores else 0
+    hype_icon = "🔥" if avg_hype > 30 else "📉" if avg_hype < 10 else "📊"
+    msg += f"{hype_icon} *Daily Hype Cycle Index*: {avg_hype:.1f}\n\n"
+
     by_cat: dict[str, list] = {}
     for a in articles:
         cat = a.get("category", "General")

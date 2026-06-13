@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS claims (
     debunked_note   TEXT DEFAULT NULL,
     reasoning       TEXT DEFAULT '',
     tickers_json    TEXT DEFAULT '[]',
-    price_data_json TEXT DEFAULT '{}'
+    price_data_json TEXT DEFAULT '{}',
+    hype_score      INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_claims_url_hash ON claims(url_hash);
@@ -36,4 +37,31 @@ CREATE TABLE IF NOT EXISTS api_quotas (
     api_name        TEXT PRIMARY KEY,
     calls_used      INTEGER DEFAULT 0,
     resets_at       TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS system_metrics (
+    id              SERIAL PRIMARY KEY,
+    timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    event_type      TEXT NOT NULL,
+    latency_ms      INTEGER DEFAULT 0,
+    source          TEXT DEFAULT '',
+    cache_hit       BOOLEAN DEFAULT FALSE,
+    llm_cost        REAL DEFAULT 0.0
+);
+
+CREATE TABLE IF NOT EXISTS source_credibility (
+    source_domain   TEXT PRIMARY KEY,
+    total_articles  INTEGER DEFAULT 0,
+    verified_claims INTEGER DEFAULT 0,
+    debunked_claims INTEGER DEFAULT 0,
+    credibility_score REAL DEFAULT 50.0,
+    last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS source_health (
+    source_id       TEXT PRIMARY KEY,
+    consecutive_failures INTEGER DEFAULT 0,
+    next_attempt_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_degraded     BOOLEAN DEFAULT FALSE,
+    last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

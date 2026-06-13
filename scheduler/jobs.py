@@ -10,7 +10,7 @@ from config.settings import (
     EVENING_HOUR, EVENING_MINUTE, FETCH_INTERVAL_MINUTES,
 )
 from ingestors.manager import manager
-from database.db import get_claims_since
+from database.db import get_claims_since, cleanup_old_metrics
 from notifications.telegram import (
     send_morning_brief, send_evening_recap,
     send_weekly_summary, track_failure
@@ -56,11 +56,39 @@ async def job_evening_recap():
         logger.error(f"[Scheduler] Evening recap failed: {e}", exc_info=True)
 
 async def job_weekly_summary():
-    """Send Sunday 9 AM weekly summary via Telegram."""
+    """Send Sunday 10 PM weekly summary via Telegram."""
     logger.info("[Scheduler] Sending weekly summary...")
     try:
         articles = await asyncio.to_thread(get_claims_since, 168)  # 7 days
         await asyncio.to_thread(send_weekly_summary, articles)
+
+        # --- Metrics Snapshot ---
+        try:
+            from database.db import get_recent_metrics
+            from notifications.telegram import _send_message
+            metrics = await asyncio.to_thread(get_recent_metrics, 168)
+            if metrics:
+                latencies = [m["latency_ms"] for m in metrics if m.get("event_type") == "fetch_cycle"]
+                avg_latency = sum(latencies) / len(latencies) if latencies else 0
+                
+                volumes = [m["llm_cost"] for m in metrics if m.get("event_type") == "fetch_cycle"]
+                avg_volume = sum(volumes) / len(volumes) if volumes else 0
+                
+                hype_scores = [a.get("hype_score", 0) for a in articles]
+                avg_hype = sum(hype_scores) / len(hype_scores) if hype_scores else 0
+                
+                msg = (
+                    "📊 *Weekly System Snapshot*\n"
+                    f"⏱ Avg Latency: {avg_latency:.0f}ms\n"
+                    f"📦 Avg Volume: {avg_volume:.1f} novel/cycle\n"
+                    f"🔥 Avg Hype Index: {avg_hype:.1f}"
+                )
+                await asyncio.to_thread(_send_message, msg)
+        except Exception as e:
+            logger.error(f"[Scheduler] Failed to send metrics snapshot: {e}")
+        # ------------------------
+
+        await asyncio.to_thread(cleanup_old_metrics, 7)  # Clean up metrics older than 7 days
         logger.info(f"[Scheduler] Weekly summary sent: {len(articles)} items")
     except Exception as e:
         await asyncio.to_thread(track_failure, "weekly_summary", str(e))
@@ -80,6 +108,20 @@ async def job_keep_alive():
         logger.debug(f"[Keep-Alive] Pinged {render_url}: {resp.status_code}")
     except Exception as e:
         logger.warning(f"[Keep-Alive] Ping failed: {e}")
+
+    # Health Monitor: Check if fetch cycle is hung
+    try:
+        import time
+        if manager.last_fetch_time > 0:
+            elapsed_mins = (time.monotonic() - manager.last_fetch_time) / 60
+            if elapsed_mins > (FETCH_INTERVAL_MINUTES * 2):
+                await asyncio.to_thread(
+                    track_failure, 
+                    "health_monitor", 
+                    f"⚠️ Agent Health Warning: No fetch cycle completed in {elapsed_mins:.1f} minutes! Instance might be hung."
+                )
+    except Exception as e:
+        logger.error(f"[Health-Monitor] Check failed: {e}")
 
 def start_scheduler():
     """Start all scheduled jobs."""
@@ -107,7 +149,7 @@ def start_scheduler():
 
     scheduler.add_job(
         job_weekly_summary,
-        CronTrigger(day_of_week="sun", hour=9, minute=0, timezone=TIMEZONE),
+        CronTrigger(day_of_week="sun", hour=22, minute=0, timezone=TIMEZONE),
         id="weekly_summary",
         replace_existing=True,
     )
@@ -125,7 +167,7 @@ def start_scheduler():
         f"Fetch: every {FETCH_INTERVAL_MINUTES}min | "
         f"Morning: {MORNING_HOUR}:{MORNING_MINUTE:02d} | "
         f"Evening: {EVENING_HOUR}:{EVENING_MINUTE:02d} | "
-        f"Weekly: Sun 9:00 | "
+        f"Weekly: Sun 22:00 | "
         f"Keep-alive: every 10min "
         f"({TIMEZONE})"
     )

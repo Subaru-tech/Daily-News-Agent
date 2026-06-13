@@ -34,6 +34,20 @@ WATCHED_TICKERS = [
     "RELIANCE", "INFY", "TCS",
 ]
 
+# === Ticker Aliases (Indirect Resolution) ===
+TICKER_ALIASES = {
+    "apple": ["AAPL"], "iphone maker": ["AAPL"], "tim cook": ["AAPL"],
+    "microsoft": ["MSFT"], "redmond giant": ["MSFT"], "satya nadella": ["MSFT"],
+    "nvidia": ["NVDA"], "jensen huang": ["NVDA"],
+    "tesla": ["TSLA"], "elon musk": ["TSLA"],
+    "google": ["GOOGL"], "alphabet": ["GOOGL"], "sundar pichai": ["GOOGL"],
+    "amazon": ["AMZN"], "jeff bezos": ["AMZN"], "andy jassy": ["AMZN"],
+    "meta": ["META"], "facebook": ["META"], "mark zuckerberg": ["META"],
+    "bitcoin": ["BTC"], "ethereum": ["ETH"],
+    "reliance": ["RELIANCE"], "mukesh ambani": ["RELIANCE"],
+    "infosys": ["INFY"], "tcs": ["TCS"], "tata consultancy": ["TCS"]
+}
+
 # === News Categories ===
 NEWS_CATEGORIES = [
     "AI & Tech",

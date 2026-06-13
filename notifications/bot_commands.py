@@ -137,6 +137,35 @@ def _handle_latest(chat_id: int, args: str = ""):
     _send_reply(chat_id, msg)
 
 
+def _handle_metrics(chat_id: int, args: str = ""):
+    """Handle /metrics command — on-demand metrics snapshot."""
+    from database.db import get_recent_metrics, get_claims_since
+
+    metrics = get_recent_metrics(168)
+    articles = get_claims_since(hours=168)
+
+    if not metrics:
+        _send_reply(chat_id, "📊 No metrics available yet.")
+        return
+
+    latencies = [m["latency_ms"] for m in metrics if m.get("event_type") == "fetch_cycle"]
+    avg_latency = sum(latencies) / len(latencies) if latencies else 0
+
+    volumes = [m["llm_cost"] for m in metrics if m.get("event_type") == "fetch_cycle"]
+    avg_volume = sum(volumes) / len(volumes) if volumes else 0
+
+    hype_scores = [a.get("hype_score", 0) for a in articles]
+    avg_hype = sum(hype_scores) / len(hype_scores) if hype_scores else 0
+
+    msg = (
+        "📊 *System Metrics Snapshot (7 Days)*\n\n"
+        f"⏱ Avg Latency: {avg_latency:.0f}ms\n"
+        f"📦 Avg Volume: {avg_volume:.1f} novel/cycle\n"
+        f"🔥 Avg Hype Index: {avg_hype:.1f}"
+    )
+    _send_reply(chat_id, msg)
+
+
 def _handle_weekly(chat_id: int, args: str = ""):
     """Handle /weekly command — this week's summary."""
     from database.db import get_claims_since
@@ -361,6 +390,7 @@ def _handle_help(chat_id: int, args: str = ""):
         "🤖 *Daily News Agent — Commands*\n\n"
         "📊 /status — Agent stats & config\n"
         "📰 /latest — Top 5 recent stories\n"
+        "📈 /metrics — On-demand metrics snapshot\n"
         "📅 /weekly — This week's summary\n"
         "📈 /sentiment — Ticker sentiment report\n\n"
         "*Custom Alerts:*\n"
@@ -394,6 +424,7 @@ def _parse_command(text: str) -> tuple[str, str]:
 COMMAND_HANDLERS = {
     "/status": _handle_status,
     "/latest": _handle_latest,
+    "/metrics": _handle_metrics,
     "/weekly": _handle_weekly,
     "/watch": _handle_watch,
     "/unwatch": _handle_unwatch,

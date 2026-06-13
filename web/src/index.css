@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-gray-200 antialiased min-h-screen;
+    background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-surface backdrop-blur-md border border-white/10 rounded-2xl shadow-xl;
+  }
+  
+  .glass-card {
+    @apply glass-panel p-6 transition-all duration-200 hover:-translate-y-1 hover:border-primary/40;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-[#667eea] to-[#764ba2];
+  }
+
+  .tag {
+    @apply px-2.5 py-1 rounded-full text-xs font-medium border;
+  }
+  
+  .tag-green {
+    @apply bg-green-500/10 border-green-500/30 text-green-400;
+  }
+  
+  .tag-yellow {
+    @apply bg-yellow-500/10 border-yellow-500/30 text-yellow-400;
+  }
+  
+  .tag-red {
+    @apply bg-red-500/10 border-red-500/30 text-red-400;
+  }
+
+  .tag-blue {
+    @apply bg-blue-500/10 border-blue-500/30 text-blue-400;
+  }
+}

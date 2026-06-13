@@ -3,7 +3,7 @@ import logging
 import requests
 from datetime import datetime
 
-from config.settings import WATCHED_TICKERS, CATEGORY_KEYWORDS
+from config.settings import WATCHED_TICKERS, CATEGORY_KEYWORDS, TICKER_ALIASES
 from database.db import check_cache, set_cache
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,17 @@ def _check_multi_source(article: dict, all_articles: list[dict]) -> int:
 def _check_ticker_mention(article: dict) -> dict:
     """Check if any watched ticker is mentioned, get basic price context."""
     text = f"{article['title']} {article.get('summary', '')}".upper()
-    mentioned = [t for t in WATCHED_TICKERS if t in text]
+    text_lower = f"{article['title']} {article.get('summary', '')}".lower()
+    
+    # 1. Check direct mentions
+    mentioned = set([t for t in WATCHED_TICKERS if t in text])
+    
+    # 2. Check indirect aliases
+    for alias, mapped_tickers in TICKER_ALIASES.items():
+        if alias in text_lower:
+            mentioned.update(mapped_tickers)
+            
+    mentioned = list(mentioned)
 
     result = {"tickers_mentioned": mentioned, "price_data": {}}
 
@@ -120,6 +130,24 @@ def verify_structured(article: dict, all_articles: list[dict]) -> dict:
         confidence += 10
         reasoning_parts.append("Standard source (+10)")
 
+    # ── 1.5. Source Credibility (Historical) ──
+    try:
+        from urllib.parse import urlparse
+        from database.db import get_source_credibility
+        url = article.get("url", "")
+        domain = urlparse(url).netloc.lower().replace("www.", "")
+        if not domain:
+            domain = source.lower()
+            
+        cred = get_source_credibility(domain)
+        # Normalize credibility: 50 is neutral, 100 adds 15, 0 subtracts 15
+        cred_modifier = (cred - 50) * 0.3
+        confidence += cred_modifier
+        if abs(cred_modifier) > 1.0:
+            reasoning_parts.append(f"Historical Credibility {cred:.1f}/100 ({cred_modifier:+.1f})")
+    except Exception as e:
+        logger.debug(f"[Verify] Source credibility check failed: {e}")
+
     # ── 2. Multi-source corroboration ──
     corroboration = _check_multi_source(article, all_articles)
     if corroboration >= 3:
@@ -159,6 +187,7 @@ def verify_structured(article: dict, all_articles: list[dict]) -> dict:
     hype_words = ["breakthrough", "revolutionary", "game-changing", "disruptive",
                   "to the moon", "100x", "crushes", "destroys", "killer"]
     hype_count = sum(1 for w in hype_words if w in text.lower())
+    hype_score = hype_count * 15
     if hype_count >= 2:
         confidence -= 15
         reasoning_parts.append(f"Hype language detected ({hype_count} terms, -15)")
@@ -181,6 +210,7 @@ def verify_structured(article: dict, all_articles: list[dict]) -> dict:
         "reasoning": " | ".join(reasoning_parts),
         "tickers": ticker_info["tickers_mentioned"],
         "price_data": ticker_info["price_data"],
+        "hype_score": hype_score,
     }
 
     # Cache result

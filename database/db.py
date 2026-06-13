@@ -62,7 +62,8 @@ def init_db():
                     debunked_note   TEXT DEFAULT NULL,
                     reasoning       TEXT DEFAULT '',
                     tickers_json    TEXT DEFAULT '[]',
-                    price_data_json TEXT DEFAULT '{}'
+                    price_data_json TEXT DEFAULT '{}',
+                    hype_score      INTEGER DEFAULT 0
                 )
             """)
         else:
@@ -86,7 +87,8 @@ def init_db():
                     debunked_note   TEXT DEFAULT NULL,
                     reasoning       TEXT DEFAULT '',
                     tickers_json    TEXT DEFAULT '[]',
-                    price_data_json TEXT DEFAULT '{}'
+                    price_data_json TEXT DEFAULT '{}',
+                    hype_score      INTEGER DEFAULT 0
                 )
             """)
 
@@ -128,10 +130,222 @@ def init_db():
                 )
             """)
 
+        # Add hype_score if missing
+        try:
+            cur.execute("ALTER TABLE claims ADD COLUMN hype_score INTEGER DEFAULT 0")
+        except Exception:
+            pass  # Ignore if column already exists
+
+        # System Metrics table
+        if _is_postgres:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS system_metrics (
+                    id              SERIAL PRIMARY KEY,
+                    timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    event_type      TEXT NOT NULL,
+                    latency_ms      INTEGER DEFAULT 0,
+                    source          TEXT DEFAULT '',
+                    cache_hit       BOOLEAN DEFAULT FALSE,
+                    llm_cost        REAL DEFAULT 0.0
+                )
+            """)
+        else:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS system_metrics (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    event_type      TEXT NOT NULL,
+                    latency_ms      INTEGER DEFAULT 0,
+                    source          TEXT DEFAULT '',
+                    cache_hit       BOOLEAN DEFAULT 0,
+                    llm_cost        REAL DEFAULT 0.0
+                )
+            """)
+
+        # Source Credibility
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS source_credibility (
+                source_domain   TEXT PRIMARY KEY,
+                total_articles  INTEGER DEFAULT 0,
+                verified_claims INTEGER DEFAULT 0,
+                debunked_claims INTEGER DEFAULT 0,
+                credibility_score REAL DEFAULT 50.0,
+                last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Source Health (Self-Healing Ingestors)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS source_health (
+                source_id       TEXT PRIMARY KEY,
+                consecutive_failures INTEGER DEFAULT 0,
+                next_attempt_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_degraded     BOOLEAN DEFAULT 0,
+                last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         conn.commit()
         logger.info("[DB] Schema initialized successfully.")
     except Exception as e:
         logger.error(f"[DB] Schema init failed: {e}")
+    finally:
+        conn.close()
+
+
+# ── Source Health (Self-Healing) ────────────────────────────
+
+def get_source_health(source_id: str) -> dict:
+    """Returns the health status of a source. If next_attempt_at is in the future, it should be skipped."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("SELECT consecutive_failures, next_attempt_at, is_degraded FROM source_health WHERE source_id = %s"), (source_id,))
+        row = cur.fetchone()
+        if not row:
+            return {"consecutive_failures": 0, "next_attempt_at": datetime.utcnow(), "is_degraded": False}
+            
+        next_attempt = row["next_attempt_at"]
+        if isinstance(next_attempt, str):
+            try:
+                next_attempt = datetime.fromisoformat(next_attempt.replace("Z", "+00:00"))
+            except ValueError:
+                # SQLite fallback
+                next_attempt = datetime.strptime(next_attempt, "%Y-%m-%d %H:%M:%S")
+                
+        # SQLite returns 0/1 for boolean, Postgres True/False
+        is_degraded = bool(row["is_degraded"]) 
+        return {
+            "consecutive_failures": row["consecutive_failures"],
+            "next_attempt_at": next_attempt,
+            "is_degraded": is_degraded
+        }
+    except Exception as e:
+        logger.error(f"[DB] Get source health failed for {source_id}: {e}")
+        return {"consecutive_failures": 0, "next_attempt_at": datetime.utcnow(), "is_degraded": False}
+    finally:
+        conn.close()
+
+def report_source_success(source_id: str):
+    """Reset consecutive failures for a source on success."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        if _is_postgres:
+            cur.execute("""
+                INSERT INTO source_health (source_id, consecutive_failures, next_attempt_at, is_degraded, last_updated)
+                VALUES (%s, 0, %s, false, %s)
+                ON CONFLICT (source_id) DO UPDATE SET 
+                    consecutive_failures = 0, is_degraded = false, last_updated = %s
+            """, (source_id, now, now, now))
+        else:
+            # SQLite upsert
+            cur.execute("""
+                INSERT INTO source_health (source_id, consecutive_failures, next_attempt_at, is_degraded, last_updated)
+                VALUES (?, 0, ?, 0, ?)
+                ON CONFLICT(source_id) DO UPDATE SET 
+                    consecutive_failures=0, is_degraded=0, last_updated=?
+            """, (source_id, now, now, now))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"[DB] Report source success failed for {source_id}: {e}")
+    finally:
+        conn.close()
+
+def report_source_failure(source_id: str):
+    """Increment consecutive failures and calculate exponential backoff."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        health = get_source_health(source_id)
+        failures = health["consecutive_failures"] + 1
+        
+        # Exponential backoff: 5m, 15m, 45m, 135m, capped at 6h
+        backoff_minutes = min(5 * (3 ** (failures - 1)), 360)
+        next_attempt = (datetime.utcnow() + timedelta(minutes=backoff_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+        is_degraded = failures >= 3
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        
+        if _is_postgres:
+            cur.execute("""
+                INSERT INTO source_health (source_id, consecutive_failures, next_attempt_at, is_degraded, last_updated)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (source_id) DO UPDATE SET 
+                    consecutive_failures = %s, next_attempt_at = %s, is_degraded = %s, last_updated = %s
+            """, (source_id, failures, next_attempt, is_degraded, now, failures, next_attempt, is_degraded, now))
+        else:
+            # SQLite upsert
+            cur.execute("""
+                INSERT INTO source_health (source_id, consecutive_failures, next_attempt_at, is_degraded, last_updated)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(source_id) DO UPDATE SET 
+                    consecutive_failures=?, next_attempt_at=?, is_degraded=?, last_updated=?
+            """, (source_id, failures, next_attempt, 1 if is_degraded else 0, now, failures, next_attempt, 1 if is_degraded else 0, now))
+        conn.commit()
+        
+        if is_degraded and failures == 3:
+            logger.warning(f"[Health] Source {source_id} is now DEGRADED (failed 3 times). Backoff: {backoff_minutes}m")
+            
+    except Exception as e:
+        logger.error(f"[DB] Report source failure failed for {source_id}: {e}")
+    finally:
+        conn.close()
+
+
+# ── Source Credibility ──────────────────────────────────────
+
+def get_source_credibility(domain: str) -> float:
+    """Get the credibility score of a domain (default 50.0)."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("SELECT credibility_score FROM source_credibility WHERE source_domain = %s"), (domain,))
+        row = cur.fetchone()
+        return row["credibility_score"] if row else 50.0
+    except Exception as e:
+        logger.error(f"[DB] Get source credibility failed: {e}")
+        return 50.0
+    finally:
+        conn.close()
+
+def update_source_credibility(domain: str, is_verified: bool, is_debunked: bool):
+    """Update source credibility based on verification outcomes."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        
+        # Upsert logic
+        cur.execute(_q("SELECT * FROM source_credibility WHERE source_domain = %s"), (domain,))
+        row = cur.fetchone()
+        
+        if row:
+            total = row["total_articles"] + 1
+            verified = row["verified_claims"] + (1 if is_verified else 0)
+            debunked = row["debunked_claims"] + (1 if is_debunked else 0)
+            
+            # Simple scoring formula: base 50, +2 for verified, -10 for debunked, normalized 0-100
+            score = 50.0 + (verified * 2.0) - (debunked * 10.0)
+            score = max(0.0, min(100.0, score))
+            
+            cur.execute(
+                _q("UPDATE source_credibility SET total_articles = %s, verified_claims = %s, debunked_claims = %s, credibility_score = %s, last_updated = CURRENT_TIMESTAMP WHERE source_domain = %s"),
+                (total, verified, debunked, score, domain)
+            )
+        else:
+            total = 1
+            verified = 1 if is_verified else 0
+            debunked = 1 if is_debunked else 0
+            score = 50.0 + (verified * 2.0) - (debunked * 10.0)
+            score = max(0.0, min(100.0, score))
+            
+            cur.execute(
+                _q("INSERT INTO source_credibility (source_domain, total_articles, verified_claims, debunked_claims, credibility_score) VALUES (%s, %s, %s, %s, %s)"),
+                (domain, total, verified, debunked, score)
+            )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"[DB] Update source credibility failed: {e}")
     finally:
         conn.close()
 
@@ -156,8 +370,8 @@ def save_claim(claim: dict) -> int | None:
         cur.execute(
             _q("""INSERT INTO claims
                (title, url, url_hash, summary, category, confidence,
-                verification_status, sources_json, reasoning, tickers_json, price_data_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""),
+                verification_status, sources_json, reasoning, tickers_json, price_data_json, hype_score)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""),
             (
                 claim.get("title", ""),
                 claim["url"],
@@ -170,9 +384,25 @@ def save_claim(claim: dict) -> int | None:
                 claim.get("reasoning", ""),
                 json.dumps(claim.get("tickers", [])),
                 json.dumps(claim.get("price_data", {})),
+                claim.get("hype_score", 0),
             ),
         )
         conn.commit()
+
+        # Update source credibility
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(claim["url"]).netloc.lower().replace("www.", "")
+            if not domain:
+                domain = claim.get("source", "unknown").lower()
+            
+            status = claim.get("verification_status", "unverified")
+            is_verified = (status == "verified")
+            is_debunked = (status == "debunked" or claim.get("debunked", False))
+            
+            update_source_credibility(domain, is_verified, is_debunked)
+        except Exception as e:
+            logger.debug(f"[DB] Failed to trigger source credibility update: {e}")
 
         if _is_postgres:
             cur.execute("SELECT lastval()")
@@ -398,5 +628,51 @@ def increment_quota(api_name: str):
         conn.commit()
     except Exception as e:
         logger.debug(f"[DB] Quota increment failed: {e}")
+    finally:
+        conn.close()
+
+# ── Metrics ─────────────────────────────────────────────────
+
+def log_metric(event_type: str, latency_ms: int = 0, source: str = "", cache_hit: bool = False, llm_cost: float = 0.0):
+    """Log a system metric event."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            _q("INSERT INTO system_metrics (event_type, latency_ms, source, cache_hit, llm_cost) VALUES (%s, %s, %s, %s, %s)"),
+            (event_type, latency_ms, source, cache_hit, llm_cost)
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"[DB] Log metric failed: {e}")
+    finally:
+        conn.close()
+
+def get_recent_metrics(hours: int = 24) -> list[dict]:
+    """Get metrics from the last N hours."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        since = (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(_q("SELECT * FROM system_metrics WHERE timestamp >= %s ORDER BY timestamp ASC"), (since,))
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"[DB] Get metrics failed: {e}")
+        return []
+    finally:
+        conn.close()
+
+def cleanup_old_metrics(days: int = 7):
+    """Delete metrics older than N days."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        threshold = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(_q("DELETE FROM system_metrics WHERE timestamp < %s"), (threshold,))
+        conn.commit()
+        logger.info(f"[DB] Cleaned up metrics older than {days} days.")
+    except Exception as e:
+        logger.error(f"[DB] Cleanup metrics failed: {e}")
     finally:
         conn.close()
