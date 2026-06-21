@@ -339,6 +339,10 @@ class AsyncIngestionManager:
         conf = article.verification["confidence"]
         if 40 <= conf <= 65:
             prompt = self._build_verification_prompt(article)
+            if not self._groq_key:
+                logger.warning(f"Async LLM verification skipped for {article.id}: GROQ_API_KEY missing")
+                await self._dispatch(article)
+                return
             try:
                 response = await self.http_client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
@@ -377,6 +381,10 @@ class AsyncIngestionManager:
         
         prompt = f"Sources: {sources}\nHeadlines: {headlines}\nSynthesize in 1-2 sentences how reporting differs or converges. If exactly the same across sources, state 'Sources consistently report this event.'"
         
+        if not self._groq_key:
+            logger.warning("Narrative synthesis skipped: GROQ_API_KEY missing")
+            return
+            
         try:
             response = await self.http_client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
