@@ -39,17 +39,17 @@ def init_db():
     """Initialize the database schema with connection retries."""
     import time
     conn = None
-    for attempt in range(5):
+    for attempt in range(15):
         try:
             conn = get_connection()
             break
         except Exception as e:
-            logger.warning(f"[DB] Waiting for database (attempt {attempt+1}/5): {e}")
-            if attempt < 4:
-                time.sleep(3)
+            logger.warning(f"[DB] Waiting for database (attempt {attempt+1}/15): {e}")
+            if attempt < 14:
+                time.sleep(5)
     
     if not conn:
-        logger.error("[DB] FATAL: Could not connect to database after retries.")
+        logger.error("[DB] FATAL: Could not connect to database after 75 seconds of retries.")
         raise RuntimeError("Database connection failed")
 
     try:
