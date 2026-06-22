@@ -66,18 +66,26 @@ app = FastAPI(
 )
 
 # Serve React App
-web_dist_path = os.path.join(os.path.dirname(__file__), "web", "dist")
-if os.path.isdir(web_dist_path):
-    app.mount("/assets", StaticFiles(directory=os.path.join(web_dist_path, "assets")), name="assets")
+import pathlib
+BASE_DIR = pathlib.Path(__file__).resolve().parent
+web_dist_path = BASE_DIR / "web" / "dist"
+
+logger.info(f"Looking for React dist at: {web_dist_path}")
+if web_dist_path.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(web_dist_path / "assets")), name="assets")
     
     @app.get("/", response_class=HTMLResponse)
     def serve_react_app():
-        with open(os.path.join(web_dist_path, "index.html"), "r") as f:
+        with open(web_dist_path / "index.html", "r") as f:
             return f.read()
+            
+    # Catch-all for SPA routing (must be placed after all other routes)
+    # We will register it at the very bottom of the file.
 else:
+    logger.warning(f"React dist NOT FOUND at {web_dist_path}! Directory contents: {list(BASE_DIR.glob('*'))}")
     @app.get("/", response_class=HTMLResponse)
     def dashboard_fallback():
-        return "<h1>React dashboard not built yet. Run `npm run build` in web directory.</h1>"
+        return f"<h1>React dashboard not built yet. Looking at {web_dist_path}</h1>"
 
 
 @app.get("/health")
@@ -367,6 +375,16 @@ async def webhook_post(payload: WebhookPayload):
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return {"content": f"❌ An error occurred inside Daily News Agent: {str(e)}"}
+
+# Catch-all route for SPA (React Router)
+@app.get("/{catchall:path}", response_class=HTMLResponse)
+def serve_spa(catchall: str):
+    import pathlib
+    web_dist_path = pathlib.Path(__file__).resolve().parent / "web" / "dist"
+    if web_dist_path.is_dir() and (web_dist_path / "index.html").exists():
+        with open(web_dist_path / "index.html", "r") as f:
+            return f.read()
+    return f"<h1>React dashboard not built yet. Looking at {web_dist_path}</h1>"
 
 if __name__ == "__main__":
     import uvicorn
