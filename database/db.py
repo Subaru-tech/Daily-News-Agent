@@ -36,8 +36,22 @@ def _q(query: str) -> str:
 
 
 def init_db():
-    """Initialize the database schema."""
-    conn = get_connection()
+    """Initialize the database schema with connection retries."""
+    import time
+    conn = None
+    for attempt in range(5):
+        try:
+            conn = get_connection()
+            break
+        except Exception as e:
+            logger.warning(f"[DB] Waiting for database (attempt {attempt+1}/5): {e}")
+            if attempt < 4:
+                time.sleep(3)
+    
+    if not conn:
+        logger.error("[DB] FATAL: Could not connect to database after retries.")
+        raise RuntimeError("Database connection failed")
+
     try:
         cur = conn.cursor()
 
@@ -175,15 +189,26 @@ def init_db():
         """)
         
         # Source Health (Self-Healing Ingestors)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS source_health (
-                source_id       TEXT PRIMARY KEY,
-                consecutive_failures INTEGER DEFAULT 0,
-                next_attempt_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_degraded     BOOLEAN DEFAULT 0,
-                last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        if _is_postgres:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS source_health (
+                    source_id       TEXT PRIMARY KEY,
+                    consecutive_failures INTEGER DEFAULT 0,
+                    next_attempt_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_degraded     BOOLEAN DEFAULT FALSE,
+                    last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS source_health (
+                    source_id       TEXT PRIMARY KEY,
+                    consecutive_failures INTEGER DEFAULT 0,
+                    next_attempt_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_degraded     BOOLEAN DEFAULT 0,
+                    last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
         conn.commit()
         logger.info("[DB] Schema initialized successfully.")
